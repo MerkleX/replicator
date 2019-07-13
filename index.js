@@ -70,6 +70,14 @@ const markets = [
   },
 ];
 
+const replication = {};
+markets.forEach(market => {
+  replication[market.merklex] = {
+    [true]: {},
+    [false]: {},
+  };
+});
+
 const orderbooks = new CoinbasePro.OrderbookSync(markets.map(i => i.coinbase));
 const merklex = new merkleX(settings.merklex);
 
@@ -80,7 +88,6 @@ const coinbase = new CoinbasePro.AuthenticatedClient(
   'https://api.pro.coinbase.com'
 );
 
-
 merklex.connect();
 merklex.on('report', report => {
   if (report.type === 'Match') {
@@ -88,6 +95,19 @@ merklex.on('report', report => {
   }
   else if (report.type === 'OrderDetails') {
     merklex.cancelOrder(report.order_token);
+  }
+  else if (report.type === 'OrderDone') {
+    const R = replication[report.market] && replication[report.market][report.is_buy];
+    if (R) {
+      Object.keys(R).forEach(idx => {
+        const p = R[idx];
+        p.then(old => {
+          if (old.order_token === report.order_token && p === R[idx]) {
+            delete R[idx];
+          }
+        });
+      });
+    }
   }
   // console.log('got report %j', report);
 });
@@ -116,13 +136,6 @@ function updateLimit(market_symbol) {
 
 const NO_ORDER = Promise.resolve({ order_token: 0 });
 
-const replication = {};
-markets.forEach(market => {
-  replication[market.merklex] = {
-    [true]: {},
-    [false]: {},
-  };
-});
 
 function collectOrders(side, remaining, book_scale, price_adjust) {
   const orders = [];
