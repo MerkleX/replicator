@@ -26,6 +26,10 @@ const markets = [
     level_slope: '1.002',
     levels: 3,
     book_scale: '0.25',
+    replay: true,
+    buy_price: null,
+    cb_base_currency: 'BAT',
+    cb_quote_currency: 'USDC',
   },
   {
     merklex: 'WETH-DAI',
@@ -37,6 +41,10 @@ const markets = [
     level_slope: '1.002',
     levels: 3,
     book_scale: '0.25',
+    replay: true,
+    buy_price: null,
+    cb_base_currency: 'ETH',
+    cb_quote_currency: 'USD',
   },
   {
     merklex: 'ZRX-DAI',
@@ -48,6 +56,10 @@ const markets = [
     level_slope: '1.002',
     levels: 3,
     book_scale: '0.5',
+    replay: true,
+    buy_price: null,
+    cb_base_currency: 'ZRX',
+    cb_quote_currency: 'USD',
   },
   {
     merklex: '0xBTC-DAI',
@@ -59,14 +71,6 @@ const markets = [
     level_slope: '1.002',
     levels: 4,
     book_scale: '1',
-  //  limit: {
-  //    market: '0xBTC-DAI',
-  //    min_quote: '-1000',
-  //    min_base: '-10000',
-  //    long_max_price: '1',
-  //    short_min_price: '0.2',
-  //    fee_limit: '0',
-  //  }
   },
 ];
 
@@ -78,7 +82,7 @@ markets.forEach(market => {
   };
 });
 
-const orderbooks = new CoinbasePro.OrderbookSync(markets.map(i => i.coinbase));
+let orderbooks = new CoinbasePro.OrderbookSync(markets.map(i => i.coinbase));
 const merklex = new merkleX(settings.merklex);
 
 const coinbase = new CoinbasePro.AuthenticatedClient(
@@ -88,10 +92,88 @@ const coinbase = new CoinbasePro.AuthenticatedClient(
   'https://api.pro.coinbase.com'
 );
 
+const pending_amount = {};
+
+function getPending(market, is_buy) {
+  const res = pending_amount[market.coinbase] && pending_amount[market.coinbase][is_buy];
+  if (res) {
+    return res;
+  }
+
+  if (!pending_amount[market.coinbase]) {
+    pending_amount[market.coinbase] = {};
+  }
+
+  const r = pending_amount[market.coinbase][is_buy] = {
+    size: Big(0),
+    funds: Big(0),
+  };
+  return r;
+}
+
+const ZERO = Big(0);
+
 merklex.connect();
 merklex.on('report', report => {
   if (report.type === 'Match') {
     console.log('%j', report);
+
+    const market = markets.find(m => m.merklex === report.market);
+    if (market && market.replay && report.sequence /* not self trade */) {
+      if (report.is_buy) {
+        Big.RM = 3; // round up
+
+        const report_funds = Big(report.quantity).mul(report.price).mul('1.003');
+
+        const P = getPending(market, true);
+        const size = P.size = P.size.add(report.quantity);
+        const funds = P.funds = P.funds.add(report_funds);
+
+        P.size = ZERO;
+        P.funds = ZERO;
+
+        coinbase.placeOrder({
+          product_id: market.coinbase,
+          side: 'sell',
+          type: 'market',
+          size: size.toFixed(8),
+          funds: funds.toFixed(2),
+        }).catch(err => {
+          console.log('error', Object.keys(err));
+          // if (err.statusCode === 400) {
+            P.size = P.size.add(size);
+            P.funds = P.funds.add(funds);
+            return;
+          // }
+          // console.error(err);
+        });
+      }
+      else {
+        Big.RM = 0; // round down
+
+        const report_funds = Big(report.quantity).mul(report.price);
+        const P = getPending(market, true);
+        const funds = P.funds = P.funds.add(report_funds).mul('1.003');
+
+        P.funds = ZERO;
+
+        coinbase.placeOrder({
+          product_id: market.coinbase,
+          side: 'buy',
+          type: 'market',
+          funds: funds.toFixed(2),
+        }).catch(err => {
+          console.log('error', Object.keys(err));
+          // if (err.statusCode === 400) {
+            P.funds = P.funds.add(funds);
+            return;
+          // }
+          // console.error(err);
+        });
+      }
+
+      console.log('REPLAY TRADE');
+    }
   }
   else if (report.type === 'OrderDetails') {
     merklex.cancelOrder(report.order_token);
@@ -204,8 +286,11 @@ function replaceWithOrder(order, idx) {
   R[idx] = new Promise(resolve => existing.then(resolve))
     .then(report => {
       if (report.order_token !== 0) {
+        const age = Date.now() - (report.timestamp || 0);
         const quant_diff = Big(order.quantity).sub(report.quantity).abs();
-        if (quant_diff.lt(Big(report.quantity).mul('0.2')) && Big(report.price).eq(order.price)) {
+        const is_small_diff = quant_diff.lt(Big(report.quantity).mul('0.2'));
+
+        if (is_small_diff && age < 10000 && Big(report.price).eq(order.price)) {
           return report;
         }
 
@@ -216,7 +301,11 @@ function replaceWithOrder(order, idx) {
       }
 
       order.replace_order_token = report.order_token;
-      return merklex.newOrder(order);
+      return merklex.newOrder(order)
+        .then(report => {
+          report.timestamp = Date.now();
+          return report;
+        });
     })
     .catch(err => {
       if (err.report && err.request) {
@@ -249,6 +338,7 @@ function repeat(success_timeout, fail_timeout, fn) {
 }
 
 function run() {
+  /* update 0xBTC price */
   repeat(10000, 5000, () => {
     return requests.get('https://mercatox.com/public/json24')
       .then(res => JSON.parse(res.text))
@@ -261,46 +351,160 @@ function run() {
           throw new Error('market not found');
         }
 
-        market.price_adjust = details.highestBid;
+        Big.DP = 6;
+        market.price_adjust = Big(details.highestBid).add(details.lowestAsk).div(2);
+        const spread = Big(details.lowestAsk).sub(details.highestBid).div(details.highestBid).add('0.001');
+        market.profit = spread;
       });
   });
 
-  setTimeout(() => {
-    setInterval(() => {
+  /* update buy / sell value based on available funds */
+  repeat(5000, 2500, () => {
+    return coinbase.getAccounts().then(accounts => {
       markets.forEach(market => {
-        const book_state = orderbooks.books[market.coinbase].state();
+        if (!market.replay) {
+          return;
+        }
 
-        const buy_orders = formLevels(
-          collectOrders(book_state.bids, Big(market.buy_value), market.book_scale, market.price_adjust),
-          market.levels
-        );
-        const sell_orders = formLevels(
-          collectOrders(book_state.asks, Big(market.sell_value), market.book_scale, market.price_adjust),
-          market.levels,
-        );
+        const base_wallet = accounts.find(a => a.currency === market.cb_base_currency);
+        if (!base_wallet) {
+          console.error('could not find CB base_wallet for', market.cb_base_currency);
+          return;
+        }
 
-        buy_orders.forEach((order, idx) => {
-          const spread = Big(1).sub(market.profit).div(Big(market.level_slope).pow(idx));
-          order.market = market.merklex;
-          order.price = order.price.mul(spread).toPrecision(5);
-          order.quantity = order.quantity.toFixed(8);
-          order.is_buy = true;
+        if (!market.buy_price) {
+          console.error(market.merklex, 'buy price is not set');
+          return;
+        }
 
-          replaceWithOrder(order, idx);
-        });
-
-        sell_orders.forEach((order, idx) => {
-          const spread = Big(1).add(market.profit).mul(Big(market.level_slope).pow(idx));
-          order.market = market.merklex;
-          order.price = order.price.mul(spread).toPrecision(5);
-          order.quantity = order.quantity.toFixed(8);
-          order.is_buy = false;
-
-          replaceWithOrder(order, idx);
-        });
+        const balance = Big(base_wallet.available);
+        market.buy_value = balance.mul(market.buy_price) + '';
+        console.log('set buy value', market.merklex, market.buy_value);
       });
-    }, 1000);
+
+      markets.forEach(market => {
+        if (!market.replay) {
+          return;
+        }
+
+        const quote_wallet = accounts.find(a => a.currency === market.cb_quote_currency);
+        if (!quote_wallet) {
+          console.error('could not find CB quote_wallet for', market.cb_quote_currency);
+          return;
+        }
+
+        // market.sell_value = quote_wallet.available;
+        // console.log('set sell value', market.merklex, market.sell_value);
+      });
+    });
+  });
+
+  let errors = {};
+
+  const MAX_ERRORS = 500;
+  const RELOAD_ERRORS = 100;
+
+  const error = market_id => {
+    errors[market_id] = (errors[market_id] || 0) + 1;
+    if (errors[market_id] >= MAX_ERRORS) {
+      console.log(market_id, 'book is crossed ' + MAX_ERRORS + ' times');
+      process.exit(1);
+    }
+
+    if (errors[market_id] >= RELOAD_ERRORS) {
+      console.log('reload orderbook due to error with', market_id);
+      orderbooks.disconnect();
+      orderbooks = null;
+
+      const updated = new CoinbasePro.OrderbookSync(markets.map(i => i.coinbase));
+      updated.on('open', () => {
+        orderbooks = updated;
+        errors = {};
+      });
+    }
+  };
+
+  setInterval(() => {
+    markets.forEach(market => {
+      if (!orderbooks) {
+        console.log('orderbooks not yet connected');
+        return;
+      }
+
+      const book = orderbooks.books[market.coinbase];
+      if (!book) {
+        console.log('book not loaded');
+        error(market.coinbase);
+        return;
+      }
+
+      const book_state = book.state();
+
+      if (!book_state) {
+        console.log('book state not loaded');
+        error(market.coinbase);
+        return;
+      }
+
+      if (!book_state.bids.length || !book_state.asks.length) {
+        console.log('missing orders in book');
+        error(market.coinbase);
+        return;
+      }
+
+      const buy_orders = formLevels(
+        collectOrders(book_state.bids, Big(market.buy_value), market.book_scale, market.price_adjust),
+        market.levels
+      );
+      const sell_orders = formLevels(
+        collectOrders(book_state.asks, Big(market.sell_value), market.book_scale, market.price_adjust),
+        market.levels,
+      );
+
+      buy_orders.forEach((order, idx) => {
+        const spread = Big(1).sub(market.profit).div(Big(market.level_slope).pow(idx));
+        order.market = market.merklex;
+        order.price = order.price.mul(spread).toPrecision(5);
+        order.quantity = order.quantity.toFixed(8);
+        order.is_buy = true;
+      });
+
+      sell_orders.forEach((order, idx) => {
+        const spread = Big(1).add(market.profit).mul(Big(market.level_slope).pow(idx));
+        order.market = market.merklex;
+        order.price = order.price.mul(spread).toPrecision(5);
+        order.quantity = order.quantity.toFixed(8);
+        order.is_buy = false;
+      });
+
+      if (buy_orders.length) {
+        market.buy_price = buy_orders[0].price;
+      }
+
+      /* order buys and sell placement to prevent self-trading */
+      let i = 0;
+      for (i = 0; i < Math.min(buy_orders.length, sell_orders.length); ++i) {
+        replaceWithOrder(sell_orders[i], i);
+        replaceWithOrder(buy_orders[i], i);
+      }
+
+      for (i = 0; i < sell_orders.length; ++i) {
+        replaceWithOrder(sell_orders[i], i);
+      }
+
+      for (i = 0; i < buy_orders.length; ++i) {
+        replaceWithOrder(buy_orders[i], i);
+      }
+
+      if (Big(book_state.bids[0].price).gt(book_state.asks[0].price)) {
+        console.log(market.coinbase, 'book crossed');
+        error(market.coinbase);
+      }
+      else {
+        errors[market] = 0;
+      }
+    });
   }, 1000);
 }
 
-setTimeout(run, 3000);
+setTimeout(run, 1000);
