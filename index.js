@@ -9,8 +9,10 @@ const markets = [
     merklex: 'DAI-USDC',
     coinbase: 'DAI-USDC',
     price_adjust: '1',
-    buy_value: '100.0',
+    buy_value: '500.0',
     sell_value: '100.0',
+    buy_max: '100',
+    sell_max: '100',
     profit: '0.005',
     level_slope: '1.0001',
     levels: 2,
@@ -22,6 +24,8 @@ const markets = [
     price_adjust: '1',
     buy_value: '50.0',
     sell_value: '2.0',
+    sell_max: '200',
+    buy_max: '300',
     profit: '0.005',
     level_slope: '1.002',
     levels: 3,
@@ -37,6 +41,8 @@ const markets = [
     price_adjust: '1',
     buy_value: '600.0',
     sell_value: '300.0',
+    sell_max: '300',
+    buy_max: '300',
     profit: '0.005',
     level_slope: '1.002',
     levels: 3,
@@ -52,6 +58,8 @@ const markets = [
     price_adjust: '1',
     buy_value: '50.0',
     sell_value: '2.0',
+    sell_max: '250',
+    buy_max: '300',
     profit: '0.005',
     level_slope: '1.002',
     levels: 3,
@@ -67,6 +75,7 @@ const markets = [
     price_adjust: '0.000025',
     buy_value: '200.0',
     sell_value: '1000.0',
+    buy_max: '300',
     profit: '0.01',
     level_slope: '1.002',
     levels: 4,
@@ -119,7 +128,7 @@ merklex.on('report', report => {
     console.log('%j', report);
 
     const market = markets.find(m => m.merklex === report.market);
-    if (market && market.replay && report.sequence /* not self trade */) {
+    if (market && market.replay && +report.sequence /* not self trade */) {
       if (report.is_buy) {
         Big.RM = 3; // round up
 
@@ -353,8 +362,8 @@ function run() {
 
         Big.DP = 6;
         market.price_adjust = Big(details.highestBid).add(details.lowestAsk).div(2);
-        const spread = Big(details.lowestAsk).sub(details.highestBid).div(details.highestBid).add('0.001');
-        market.profit = spread;
+        // const spread = Big(details.lowestAsk).sub(details.highestBid).div(details.highestBid).add('0.001');
+        // market.profit = spread;
       });
   });
 
@@ -393,16 +402,16 @@ function run() {
           return;
         }
 
-        // market.sell_value = quote_wallet.available;
-        // console.log('set sell value', market.merklex, market.sell_value);
+        market.sell_value = quote_wallet.available;
+        console.log('set sell value', market.merklex, market.sell_value);
       });
     });
   });
 
   let errors = {};
 
-  const MAX_ERRORS = 500;
-  const RELOAD_ERRORS = 100;
+  const MAX_ERRORS = 500 * 3;
+  const RELOAD_ERRORS = 100 * 3;
 
   const error = market_id => {
     errors[market_id] = (errors[market_id] || 0) + 1;
@@ -452,12 +461,23 @@ function run() {
         return;
       }
 
+      let buy_value = Big(market.buy_value);
+      if (market.buy_max && buy_value.gt(market.buy_max)) {
+        buy_value = Big(market.buy_max);
+      }
+
       const buy_orders = formLevels(
-        collectOrders(book_state.bids, Big(market.buy_value), market.book_scale, market.price_adjust),
+        collectOrders(book_state.bids, Big(buy_value), market.book_scale, market.price_adjust),
         market.levels
       );
+
+      let sell_value = Big(market.sell_value);
+      if (market.sell_max && sell_value.gt(market.sell_max)) {
+        sell_value = Big(market.sell_max);
+      }
+
       const sell_orders = formLevels(
-        collectOrders(book_state.asks, Big(market.sell_value), market.book_scale, market.price_adjust),
+        collectOrders(book_state.asks, sell_value, market.book_scale, market.price_adjust),
         market.levels,
       );
 
@@ -504,7 +524,7 @@ function run() {
         errors[market] = 0;
       }
     });
-  }, 1000);
+  }, 300);
 }
 
 setTimeout(run, 1000);
