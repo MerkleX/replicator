@@ -149,12 +149,9 @@ merklex.on('report', report => {
           funds: funds.toFixed(2),
         }).catch(err => {
           console.log('error', Object.keys(err));
-          // if (err.statusCode === 400) {
-            P.size = P.size.add(size);
-            P.funds = P.funds.add(funds);
-            return;
-          // }
-          // console.error(err);
+          P.size = P.size.add(size);
+          P.funds = P.funds.add(funds);
+          return;
         });
       }
       else {
@@ -173,11 +170,8 @@ merklex.on('report', report => {
           funds: funds.toFixed(2),
         }).catch(err => {
           console.log('error', Object.keys(err));
-          // if (err.statusCode === 400) {
-            P.funds = P.funds.add(funds);
-            return;
-          // }
-          // console.error(err);
+          P.funds = P.funds.add(funds);
+          return;
         });
       }
 
@@ -200,33 +194,9 @@ merklex.on('report', report => {
       });
     }
   }
-  // console.log('got report %j', report);
 });
 
-// merklex.updateTradingLimit({
-//    quote_asset_id: '1',
-//    base_asset_id: '0',
-//    fee_limit: '0',
-//    min_quote_qty: '-10000.000000',
-//    min_base_qty: '-100.0000000',
-//    long_max_price: '1000000.000000000',
-//    short_min_price: '.00000001',
-//    quote_shift: '0',
-//    base_shift: '0',
-// });
-
-
-function updateLimit(market_symbol) {
-  const market = markets.find(m => m.merklex === market_symbol);
-  if (!market) {
-    return Promise.reject(new Error('could not find market: ' + market_symbol));
-  }
-
-  return merklex.updateTradingLimit(market.limit);
-}
-
 const NO_ORDER = Promise.resolve({ order_token: 0 });
-
 
 function collectOrders(side, remaining, book_scale, price_adjust) {
   const orders = [];
@@ -277,7 +247,6 @@ function formLevels(orders, count) {
     return orders;
   }
 
-  const extra = orders.count - count;
   const last_order = orders[count - 1];
 
   for (let i = count; i < orders.length; ++i) {
@@ -362,8 +331,6 @@ function run() {
 
         Big.DP = 6;
         market.price_adjust = Big(details.highestBid).add(details.lowestAsk).div(2);
-        // const spread = Big(details.lowestAsk).sub(details.highestBid).div(details.highestBid).add('0.001');
-        // market.profit = spread;
       });
   });
 
