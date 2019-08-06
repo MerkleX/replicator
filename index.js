@@ -1,6 +1,7 @@
 const settings = require('./settings');
 const merkleX = require('merklex');
 const CoinbasePro = require('coinbase-pro');
+const CoinbaseBaseOrderBook = require('./lib/cb_orderbook');
 const Big = require('big.js');
 const requests = require('superagent');
 
@@ -11,7 +12,7 @@ const markets = [
     price_adjust: '1',
     buy_value: '500.0',
     sell_value: '100.0',
-    buy_max: '100',
+    buy_max: '10',
     sell_max: '100',
     profit: '0.005',
     level_slope: '1.0001',
@@ -24,7 +25,7 @@ const markets = [
     price_adjust: '1',
     buy_value: '50.0',
     sell_value: '2.0',
-    sell_max: '200',
+    sell_max: '10',
     buy_max: '300',
     profit: '0.005',
     level_slope: '1.002',
@@ -36,13 +37,13 @@ const markets = [
     cb_quote_currency: 'USDC',
   },
   {
-    merklex: 'WETH-DAI',
+    merklex: 'ETH-DAI',
     coinbase: 'ETH-USD',
     price_adjust: '1',
     buy_value: '600.0',
     sell_value: '300.0',
     sell_max: '300',
-    buy_max: '300',
+    buy_max: '100',
     profit: '0.005',
     level_slope: '1.002',
     levels: 3,
@@ -60,7 +61,7 @@ const markets = [
     sell_value: '2.0',
     sell_max: '250',
     buy_max: '300',
-    profit: '0.005',
+    profit: '0.015',
     level_slope: '1.002',
     levels: 3,
     book_scale: '0.5',
@@ -74,9 +75,9 @@ const markets = [
     coinbase: 'BTC-USD',
     price_adjust: '0.000025',
     buy_value: '200.0',
-    sell_value: '1000.0',
-    buy_max: '300',
-    profit: '0.01',
+    sell_value: '500.0',
+    buy_max: '100',
+    profit: '0.02',
     level_slope: '1.002',
     levels: 4,
     book_scale: '1',
@@ -91,7 +92,7 @@ markets.forEach(market => {
   };
 });
 
-let orderbooks = new CoinbasePro.OrderbookSync(markets.map(i => i.coinbase));
+let orderbooks = new CoinbaseBaseOrderBook(markets.map(i => i.coinbase));
 const merklex = new merkleX(settings.merklex);
 
 const coinbase = new CoinbasePro.AuthenticatedClient(
@@ -228,15 +229,14 @@ function updateLimit(market_symbol) {
 const NO_ORDER = Promise.resolve({ order_token: 0 });
 
 
-function collectOrders(side, remaining, book_scale, price_adjust) {
+function collectOrders(read, remaining, book_scale, price_adjust) {
   const orders = [];
 
-  for (let i = 0; i < side.length; ++i) {
-    const level = side[i];
-    const price = Big(level.price).mul(price_adjust);
+  read(level => {
+    const price = Big(level[0]).mul(price_adjust);
     Big.DP = 8;
-    const size = Big(level.size).mul(book_scale).div(price_adjust);
 
+    const size = Big(level[1]).mul(book_scale).div(price_adjust);
     const value = price.mul(size);
 
     Big.DP = 8;
@@ -246,10 +246,8 @@ function collectOrders(side, remaining, book_scale, price_adjust) {
     });
 
     remaining = remaining.sub(value);
-    if (remaining.lte(0)) {
-      break;
-    }
-  }
+    return remaining.lte(0);
+  });
 
   return orders;
 }
@@ -411,25 +409,12 @@ function run() {
   let errors = {};
 
   const MAX_ERRORS = 500 * 3;
-  const RELOAD_ERRORS = 100 * 3;
 
   const error = market_id => {
     errors[market_id] = (errors[market_id] || 0) + 1;
     if (errors[market_id] >= MAX_ERRORS) {
       console.log(market_id, 'book is crossed ' + MAX_ERRORS + ' times');
       process.exit(1);
-    }
-
-    if (errors[market_id] >= RELOAD_ERRORS) {
-      console.log('reload orderbook due to error with', market_id);
-      orderbooks.disconnect();
-      orderbooks = null;
-
-      const updated = new CoinbasePro.OrderbookSync(markets.map(i => i.coinbase));
-      updated.on('open', () => {
-        orderbooks = updated;
-        errors = {};
-      });
     }
   };
 
@@ -440,34 +425,16 @@ function run() {
         return;
       }
 
-      const book = orderbooks.books[market.coinbase];
-      if (!book) {
-        console.log('book not loaded');
-        error(market.coinbase);
-        return;
-      }
-
-      const book_state = book.state();
-
-      if (!book_state) {
-        console.log('book state not loaded');
-        error(market.coinbase);
-        return;
-      }
-
-      if (!book_state.bids.length || !book_state.asks.length) {
-        console.log('missing orders in book');
-        error(market.coinbase);
-        return;
-      }
-
       let buy_value = Big(market.buy_value);
       if (market.buy_max && buy_value.gt(market.buy_max)) {
         buy_value = Big(market.buy_max);
       }
 
+      const read_buys = orderbooks.read.bind(orderbooks, market.coinbase, 'buy');
+      const read_sells = orderbooks.read.bind(orderbooks, market.coinbase, 'sell');
+
       const buy_orders = formLevels(
-        collectOrders(book_state.bids, Big(buy_value), market.book_scale, market.price_adjust),
+        collectOrders(read_buys, buy_value, market.book_scale, market.price_adjust),
         market.levels
       );
 
@@ -477,7 +444,7 @@ function run() {
       }
 
       const sell_orders = formLevels(
-        collectOrders(book_state.asks, sell_value, market.book_scale, market.price_adjust),
+        collectOrders(read_sells, sell_value, market.book_scale, market.price_adjust),
         market.levels,
       );
 
@@ -514,14 +481,6 @@ function run() {
 
       for (i = 0; i < buy_orders.length; ++i) {
         replaceWithOrder(buy_orders[i], i);
-      }
-
-      if (Big(book_state.bids[0].price).gt(book_state.asks[0].price)) {
-        console.log(market.coinbase, 'book crossed');
-        error(market.coinbase);
-      }
-      else {
-        errors[market] = 0;
       }
     });
   }, 300);

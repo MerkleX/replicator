@@ -9,7 +9,9 @@
   "author": "",
   "private": true,
   "dependencies": {
+    "bintrees": "^1.0.2",
     "coinbase-pro": "^0.9.0",
-    "merklex": "0.1.2"
+    "merklex": "0.1.2",
+    "ws": "^7.1.1"
   }
 }
