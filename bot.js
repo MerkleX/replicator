@@ -20,6 +20,11 @@ const sources = [
       fees: '0.003',
       price_decimals: 2,
     },
+    base: {
+      value_limits: {
+        simple: '50',
+      },
+    }
   },
   {
     market: 'BAT-DAI',
@@ -32,6 +37,11 @@ const sources = [
       fees: '0.003',
       price_decimals: 2,
     },
+    base: {
+      value_limits: {
+        simple: '100',
+      },
+    }
   },
   {
     market: 'ETH-DAI',
@@ -44,6 +54,11 @@ const sources = [
       fees: '0.003',
       price_decimals: 2,
     },
+    base: {
+      value_limits: {
+        simple: '300',
+      },
+    }
   },
   {
     market: 'ZRX-DAI',
@@ -56,6 +71,11 @@ const sources = [
       fees: '0.003',
       price_decimals: 2,
     },
+    base: {
+      value_limits: {
+        simple: '300',
+      },
+    }
   },
   {
     market: '0xBTC-DAI',
@@ -69,6 +89,11 @@ const sources = [
       fees: '0.003',
       price_decimals: 2,
     },
+    base: {
+      value_limits: {
+        simple: '100',
+      },
+    }
   }
 ];
 
