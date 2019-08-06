@@ -1,8 +1,10 @@
 const Big = require('big.js');
 
 const DEFAULT_SIDE = {
-  max_value: '100',
-  target_value: '100',
+  value_limits: {
+    simple: '100',
+  },
+  quantity_limits: {},
   scale: '0.25',
   levels: 2,
   spread: '0.005',
@@ -11,14 +13,35 @@ const DEFAULT_SIDE = {
 
 const DEFAULT_BASE = {
   price_adjust: '1',
+  rebalance: false,
 };
 
+const ZERO = Big(0);
+
 const NO_ORDER = Promise.resolve({ order_token: 0 });
+
+function getLimit(limits) {
+  let limit = null;
+  Object.keys(limits).forEach(key => {
+    let v = limits[key];
+    if (!v) {
+      return;
+    }
+
+    v = Big(v);
+    if (!limit || limit.gt(v)) {
+      limit = v;
+    }
+  });
+
+  return limit;
+}
 
 class Replicator {
   constructor(target, sources) {
     this._target = target;
     this._resting_orders = {};
+    this._position = {};
 
     this._sources = sources.map(source => {
       const iface = source.exchange.iface;
@@ -30,6 +53,16 @@ class Replicator {
           ...DEFAULT_SIDE,
           ...source.base,
           ...source.buy,
+          value_limits: {
+            ...DEFAULT_SIDE.value_limits,
+            ...(source.base && source.base.value_limits),
+            ...(source.buy && source.buy.value_limits),
+          },
+          quantity_limits: {
+            ...DEFAULT_SIDE.quantity_limits,
+            ...(source.base && source.base.quantity_limits),
+            ...(source.buy && source.buy.quantity_limits),
+          },
           is_buy: true,
           level_read: iface.readLevels.bind(iface, source.exchange.market, true),
         },
@@ -37,6 +70,16 @@ class Replicator {
           ...DEFAULT_SIDE,
           ...source.base,
           ...source.sell,
+          value_limits: {
+            ...DEFAULT_SIDE.value_limits,
+            ...(source.base && source.base.value_limits),
+            ...(source.sell && source.sell.value_limits),
+          },
+          quantity_limits: {
+            ...DEFAULT_SIDE.quantity_limits,
+            ...(source.base && source.base.quantity_limits),
+            ...(source.sell && source.sell.quantity_limits),
+          },
           is_buy: false,
           level_read: iface.readLevels.bind(iface, source.exchange.market, false)
         },
@@ -50,9 +93,143 @@ class Replicator {
 
       return s;
     });
+
+    this._target.handleMatch(this._onMatch.bind(this));
+    this._target.handleOrderDetails(this._onOrderDetails.bind(this));
   }
 
-  refresh() {
+  _onOrderDetails(order) {
+    const resting_orders = this._getResting(order.market, order.is_buy);
+    const source = this._sources.find(s => s.market === order.market);
+    if (!source) {
+      this._target.cancelOrder(order);
+      return;
+    }
+
+    const source_side = order.is_buy
+      ? source.buy
+      : source.sell;
+
+    for (let i = 0; i < source_side.levels; ++i) {
+      const resting = resting_orders[i];
+
+      if (!resting) {
+        resting_orders[i] = Promise.resolve(order);
+        return;
+      }
+    }
+
+    this._target.cancelOrder(order);
+  }
+
+  _onMatch(report) {
+    const source = this._sources.find(s => s.market === report.market);
+    if (!source.rebalance) {
+      return;
+    }
+
+    let position = this._position[source.market];
+    if (!position) {
+      position = {
+        source,
+        current: {
+          quote: ZERO,
+          base: ZERO,
+        },
+        target: {
+          quote: ZERO,
+          base: ZERO,
+        },
+      };
+      this._position[source.market] = position;
+    }
+
+    if (report.is_buy) {
+      const value = Big(report.quantity).mul(report.price);
+      position.target.quote = position.target.quote.sub(value);
+      position.target.base = position.target.base.add(report.quantity);
+    }
+    else {
+      const value = Big(report.quantity).mul(report.price);
+      position.target.quote = position.target.quote.add(value);
+      position.target.base = position.target.base.sub(report.quantity);
+    }
+
+    this._balancePosition(position);
+  }
+
+  _balancePosition(position) {
+    const quote_delta = position.target.quote.sub(position.current.quote);
+    const base_delta = position.target.base.sub(position.current.base);
+
+    const { iface, fees, price_decimals } = position.source.exchange;
+
+    position.current.quote = position.current.quote.add(quote_delta);
+    position.current.base = position.current.base.add(base_delta);
+
+    let p;
+
+    if (quote_delta.gt(0) && base_delta.lt(0)) {
+      p = iface.newOrder({
+        market: position.source.exchange.market,
+        is_buy: true,
+        size: ZERO.sub(base_delta).toFixed(8),
+        price: ZERO.sub(quote_delta.div(base_delta)).div(Big(1).add(position.source.exchange.fees)).toFixed(price_decimals),
+      });
+    }
+    else if (quote_delta.lt(0) && base_delta.gt(0)) {
+      p = iface.newOrder({
+        market: position.source.exchange.market,
+        is_buy: false,
+        size: base_delta.toFixed(8),
+        price: ZERO.sub(quote_delta.div(base_delta)).mul(Big(1).add(position.source.exchange.fees)).toFixed(price_decimals),
+      });
+    }
+
+    p.catch(err => {
+      position.current.quote = position.current.quote.sub(quote_delta);
+      position.current.base = position.current.base.sub(base_delta);
+    });
+  }
+
+  refreshSourceBalances() {
+    const to_load = [];
+    const exchanges = {};
+
+    /* load balances from each source exchnage */
+    this._sources.forEach(source => {
+      const { iface } = source.exchange;
+      if (exchanges[iface.name]) {
+        return;
+      }
+
+      const p = iface.getBalances();
+      exchanges[iface.name] = p.then(res => {
+        exchanges[iface.name] = res;
+      });
+      to_load.push(p);
+    });
+
+    return Promise.all(to_load)
+      .then(() => {
+        /* set limits based on available balance on source exchnage */
+        this._sources.forEach(source => {
+          if (!source.rebalance) {
+            return;
+          }
+
+          const balances = exchanges[source.exchange.iface.name];
+          source.buy.value_limits.source_balance = balances[source.exchange.quote].available;
+          source.sell.quantity_limits.source_balance = balances[source.exchange.base].available;
+        });
+      });
+  }
+
+  getSource(market) {
+    return this._sources.find(s => s.market === market);
+  }
+
+  refreshOrders() {
     this._sources.forEach(source => this._replicate(source));
   }
 
@@ -84,7 +261,7 @@ class Replicator {
       if (report.order_token !== 0) {
         const age = Date.now() - (report.timestamp || 0);
         const quant_diff = Big(order.quantity).sub(report.quantity).abs();
-        const is_small_diff = quant_diff.lt(Big(report.quantity).mul('0.1'));
+        const is_small_diff = !quant_diff.gt(Big(report.quantity).mul('0.2'));
 
         /* old order is similar, ignore */
         if (is_small_diff && age < 10000 && Big(report.price).eq(order.price)) {
@@ -123,14 +300,14 @@ class Replicator {
   }
 
   _buildOrders(source, source_side) {
-    let value = Big(source_side.target_value);
-    if (value.gt(source_side.max_value)) {
-      value = Big(source_side.max_value);
-    }
+    const remaining = {
+      quantity: getLimit(source_side.quantity_limits),
+      value: getLimit(source_side.value_limits),
+    };
 
     let levels = this._collectLevels(
       source_side.level_read,
-      value,
+      remaining,
       source_side.scale,
       source.price_adjust
     );
@@ -141,32 +318,67 @@ class Replicator {
       market: source.market,
       pos,
       price: Big(level.price.mul(source_side.spread(pos)).toPrecision(5)) + '',
-      quantity: level.quantity.toFixed(0),
+      quantity: level.quantity.toFixed(8),
       is_buy: source_side.is_buy,
     }));
   }
 
   _collectLevels(read, remaining, book_scale, price_adjust) {
-    const orders = [];
+    const levels = [];
 
     read(level => {
       const price = Big(level[0]).mul(price_adjust);
       Big.DP = 8;
 
-      const size = Big(level[1]).mul(book_scale).div(price_adjust);
-      const value = price.mul(size);
+      const quantity = Big(level[1]).mul(book_scale).div(price_adjust);
+      const value = price.mul(quantity);
 
-      Big.DP = 8;
-      orders.push({
+      let level_quantity;
+      let done = false;
+
+      /* not blocked by remaining.value */
+      if (!remaining.value || remaining.value.gt(value)) {
+
+        /* blocked by remaining.quantity */
+        if (remaining.quantity && remaining.quantity.lt(quantity)) {
+          level_quantity = remaining.quantity;
+          done = true;
+        }
+
+        /* not blocked by remaining.quantity */
+        else {
+          level_quantity = quantity;
+        }
+      }
+      /* blocked by remaining.value */
+      else {
+        Big.DP = 8;
+        level_quantity = remaining.value.div(price);
+        done = true;
+
+        /* blocked further by remaining.quantity */
+        if (remaining.quantity && remaining.quantity.lt(level_quantity)) {
+          level_quantity = remaining.quantity;
+        }
+      }
+
+      levels.push({
         price,
-        quantity: remaining.gt(value) ? size : remaining.div(price),
+        quantity: level_quantity,
       });
 
-      remaining = remaining.sub(value);
-      return remaining.lte(0);
+      if (remaining.value) {
+        remaining.value = remaining.value.sub(price.mul(level_quantity));
+      }
+
+      if (remaining.quantity) {
+        remaining.quantity = remaining.quantity.sub(level_quantity);
+      }
+
+      return done;
     });
 
-    return orders;
+    return levels;
   }
 
   _distributeLevels(levels, count) {

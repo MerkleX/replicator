@@ -1,3 +1,5 @@
 settings.js
 node_modules
 package-lock.json
+*.iml
+.idea/

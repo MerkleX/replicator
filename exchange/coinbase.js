@@ -11,6 +11,26 @@ class Coinbase {
     );
   }
 
+  get name() {
+    return 'coinbase-pro';
+  }
+
+  getBalances() {
+    return this._api.getAccounts().then(accounts => {
+      const balances = {};
+
+      accounts.forEach(a => {
+        balances[a.currency] = {
+          balance: a.balance,
+          available: a.available,
+          hold: a.hold,
+        };
+      });
+
+      return balances;
+    });
+  }
+
   subscribeMarkets(markets) {
     if (this._orderbooks) {
       this._orderbooks.close();
@@ -25,6 +45,18 @@ class Coinbase {
 
     this._orderbooks.read(market, side, fn);
   }
-};
+
+  newOrder(order) {
+    return this._api.placeOrder({
+      product_id: order.market,
+      side: order.is_buy ? 'buy' : 'sell',
+      type: 'limit',
+      size: order.size,
+      price: order.price
+    }).then(res => {
+      console.log('rebalance %j', res.body);
+    });
+  }
+}
 
 module.exports = Coinbase;
