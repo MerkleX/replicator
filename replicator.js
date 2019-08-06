@@ -1,9 +1,6 @@
 const Big = require('big.js');
 
 const DEFAULT_SIDE = {
-  value_limits: {
-    simple: '100',
-  },
   quantity_limits: {},
   scale: '0.25',
   levels: 2,
