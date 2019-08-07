@@ -7,7 +7,7 @@ To learn more: [https://discord.gg/YWzv8aZ](https://discord.gg/YWzv8aZ)
 
 ## How to Run
 
-Currently the replicator only support sourcing liquidity from Coinbase Pro and placing sed liquidity on merkleX.
+Currently the replicator only support sourcing liquidity from Coinbase Pro and placing said liquidity on merkleX.
 
 First things first, you'll need to configure settings.js with your secret keys to connect to both merkleX and Coinbase Pro.
 
