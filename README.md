@@ -24,6 +24,8 @@ Once settings.js has all the appropriate keys, you can edit `bot.js` to configur
 node bot.js
 ```
 
+If you see lots of TRADING\_LIMIT errors, turn off the replicator and place resting orders with the max and min prices you feel comfortable trading with. merkleX will prompt you update your trading limits. Once the trading limits are set, run the replicator using the above command.
+
 ## Features
 
  - [x] replicate liquidity from source to target
