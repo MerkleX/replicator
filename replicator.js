@@ -15,7 +15,7 @@ const DEFAULT_BASE = {
 
 const ZERO = Big(0);
 
-const NO_ORDER = Promise.resolve({ order_token: 0 });
+const NO_ORDER = Promise.resolve({order_token: 0});
 
 function getLimit(limits) {
   let limit = null;
@@ -107,13 +107,21 @@ class Replicator {
       ? source.buy
       : source.sell;
 
+    let open_idx = -1;
     for (let i = 0; i < source_side.levels; ++i) {
       const resting = resting_orders[i];
 
       if (!resting) {
-        resting_orders[i] = Promise.resolve(order);
+        open_idx = i;
+      } else if (resting.request
+        && +resting.request.order_token === +order.order_token) {
         return;
       }
+    }
+
+    if (open_idx !== -1) {
+      resting_orders[open_idx] = Promise.resolve(order);
+      return;
     }
 
     this._target.cancelOrder(order);
@@ -145,8 +153,7 @@ class Replicator {
       const value = Big(report.quantity).mul(report.price);
       position.target.quote = position.target.quote.sub(value);
       position.target.base = position.target.base.add(report.quantity);
-    }
-    else {
+    } else {
       const value = Big(report.quantity).mul(report.price);
       position.target.quote = position.target.quote.add(value);
       position.target.base = position.target.base.sub(report.quantity);
@@ -159,7 +166,7 @@ class Replicator {
     const quote_delta = position.target.quote.sub(position.current.quote);
     const base_delta = position.target.base.sub(position.current.base);
 
-    const { iface, fees, price_decimals } = position.source.exchange;
+    const {iface, fees, price_decimals} = position.source.exchange;
 
     position.current.quote = position.current.quote.add(quote_delta);
     position.current.base = position.current.base.add(base_delta);
@@ -173,8 +180,7 @@ class Replicator {
         size: ZERO.sub(base_delta).toFixed(8),
         price: ZERO.sub(quote_delta.div(base_delta)).div(Big(1).add(position.source.exchange.fees)).toFixed(price_decimals),
       });
-    }
-    else if (quote_delta.lt(0) && base_delta.gt(0)) {
+    } else if (quote_delta.lt(0) && base_delta.gt(0)) {
       p = iface.newOrder({
         market: position.source.exchange.market,
         is_buy: false,
@@ -195,7 +201,7 @@ class Replicator {
 
     /* load balances from each source exchnage */
     this._sources.forEach(source => {
-      const { iface } = source.exchange;
+      const {iface} = source.exchange;
       if (exchanges[iface.name]) {
         return;
       }
@@ -254,7 +260,7 @@ class Replicator {
     const resting_lookup = this._getResting(order.market, order.is_buy);
     const existing = resting_lookup[order.pos] || NO_ORDER;
 
-    resting_lookup[order.pos] = existing.then(report => {
+    const p = existing.then(report => {
       if (report.order_token !== 0) {
         const age = Date.now() - (report.timestamp || 0);
         const quant_diff = Big(order.quantity).sub(report.quantity).abs();
@@ -262,26 +268,29 @@ class Replicator {
 
         /* old order is similar, ignore */
         if (is_small_diff && age < 10000 && Big(report.price).eq(order.price)) {
+          p.request = existing.request;
           return report;
         }
 
         console.log('replace', order.market, order.is_buy, order.pos, report.price, 'with', order.price);
-      }
-      else {
+      } else {
         console.log('new order', order.market, order.is_buy, order.pos, 'at', order.price);
       }
 
       order.replace_order_token = report.order_token;
-      return this._target.newOrder(order)
-        .then(report => {
-          report.timestamp = Date.now();
-          return report;
-        })
-    })
-    .catch(e => {
+      const res = this._target.newOrder(order);
+      p.request = res.request;
+
+      return res.then(report => {
+        report.timestamp = Date.now();
+        return report;
+      })
+    }).catch(e => {
       console.error(e);
       return existing;
     });
+
+    resting_lookup[order.pos] = p;
   }
 
   _getResting(market, is_buy) {

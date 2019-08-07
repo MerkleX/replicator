@@ -75,6 +75,11 @@ const sources = [
       value_limits: {
         simple: '300',
       },
+    },
+    sell: {
+      value_limits: {
+        simple: '100',
+      },
     }
   },
   {
@@ -93,6 +98,28 @@ const sources = [
       value_limits: {
         simple: '100',
       },
+    }
+  },
+  {
+    market: 'REP-DAI',
+    rebalance: true,
+    exchange: {
+      iface: coinbase,
+      market: 'REP-USD',
+      quote: 'USD',
+      base: 'REP',
+      fees: '0.003',
+      price_decimals: 2,
+    },
+    base: {
+      value_limits: {
+        simple: '100',
+      },
+    },
+    sell: {
+      value_limits: {
+        simple: '3'
+      }
     }
   }
 ];

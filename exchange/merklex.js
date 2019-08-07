@@ -14,17 +14,14 @@ class MerkleX {
     if (report.type === 'OrderDetails') {
       if (this._on_order_details) {
         this._on_order_details(report);
-      }
-      else {
+      } else {
         this._unhandled_order_details.push(report);
       }
-    }
-    else if (report.type === 'Match') {
+    } else if (report.type === 'Match') {
       if (+report.sequence /* not self trade */) {
         if (this._on_match) {
           this._on_match(report);
-        }
-        else {
+        } else {
           this._unhandled_matches.push(report);
         }
       }
@@ -32,11 +29,14 @@ class MerkleX {
   }
 
   newOrder(order) {
-    return this._api.newOrder(order)
-      .then(report => {
-        report.timestamp = Date.now();
-        return report;
-      });
+    const a = this._api.newOrder(order);
+
+    const p = a.then(report => {
+      report.timestamp = Date.now();
+      return report;
+    });
+    p.request = a.request;
+    return p;
   }
 
   cancelOrder(order) {
