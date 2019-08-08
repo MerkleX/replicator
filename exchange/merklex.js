@@ -7,17 +7,14 @@ class MerkleX {
     this._api.on('report', this._onReport);
 
     this._unhandled_matches = [];
-    this._unhandled_order_details = [];
+  }
+
+  connect() {
+    return this._api.connect();
   }
 
   _onReport(report) {
-    if (report.type === 'OrderDetails') {
-      if (this._on_order_details) {
-        this._on_order_details(report);
-      } else {
-        this._unhandled_order_details.push(report);
-      }
-    } else if (report.type === 'Match') {
+    if (report.type === 'Match') {
       if (+report.sequence /* not self trade */) {
         if (this._on_match) {
           this._on_match(report);
@@ -28,25 +25,27 @@ class MerkleX {
     }
   }
 
+  getResting() {
+    return Promise.resolve(this._api.orders);
+  }
+
+  getBalances() {
+    const balances = this._api.getBalances();
+    const res = {};
+    balances.forEach(b => {
+      res[b.symbol] = b;
+    });
+    return Promise.resolve(res);
+  }
+
   newOrder(order) {
     const a = this._api.newOrder(order);
-
-    const p = a.then(report => {
-      report.timestamp = Date.now();
-      return report;
-    });
-    p.request = a.request;
-    return p;
+    a.timestamp = Date.now();
+    return a;
   }
 
   cancelOrder(order) {
     return this._api.cancelOrder(order.order_token);
-  }
-
-  handleOrderDetails(fn) {
-    this._on_order_details = fn;
-    this._unhandled_order_details.forEach(fn);
-    this._unhandled_order_details = [];
   }
 
   handleMatch(fn) {

@@ -143,9 +143,18 @@ function priceAdjust() {
     });
 }
 
-r.refreshSourceBalances();
+function timeout(time) {
+  return new Promise(resolve => {
+    setTimeout(resolve, time);
+  });
+}
 
-setTimeout(() => {
+merklex.connect().then(timeout(1000)).then(() => {
+  return Promise.all([
+    r.refreshResting(),
+    r.refreshSourceBalances(),
+  ]);
+}).then(() => {
   setInterval(() => {
     r.refreshSourceBalances();
     priceAdjust();
@@ -154,4 +163,5 @@ setTimeout(() => {
   setInterval(() => {
     r.refreshOrders();
   }, 100);
-}, 2000);
+});
+

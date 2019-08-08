@@ -11,7 +11,7 @@
   "dependencies": {
     "bintrees": "^1.0.2",
     "coinbase-pro": "^0.9.0",
-    "merklex": "0.1.5",
+    "merklex": "0.2.2",
     "web3": "^1.2.0",
     "ws": "7.1.1"
   }

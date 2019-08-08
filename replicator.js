@@ -91,11 +91,15 @@ class Replicator {
       return s;
     });
 
+    this._handleRestingOrder = this._handleRestingOrder.bind(this);
     this._target.handleMatch(this._onMatch.bind(this));
-    this._target.handleOrderDetails(this._onOrderDetails.bind(this));
   }
 
-  _onOrderDetails(order) {
+  refreshResting() {
+    return this._target.getResting().then(orders => orders.forEach(this._handleRestingOrder));
+  }
+
+  _handleRestingOrder(order) {
     const resting_orders = this._getResting(order.market, order.is_buy);
     const source = this._sources.find(s => s.market === order.market);
     if (!source) {
@@ -113,8 +117,8 @@ class Replicator {
 
       if (!resting) {
         open_idx = i;
-      } else if (resting.request
-        && +resting.request.order_token === +order.order_token) {
+      } else if (resting.order
+        && +resting.order.order_token === +order.order_token) {
         return;
       }
     }
@@ -256,41 +260,38 @@ class Replicator {
     }
   }
 
-  _replaceOrder(order) {
-    const resting_lookup = this._getResting(order.market, order.is_buy);
-    const existing = resting_lookup[order.pos] || NO_ORDER;
+  _replaceOrder(details) {
+    const resting_lookup = this._getResting(details.market, details.is_buy);
+    const existing = resting_lookup[details.pos] || NO_ORDER;
 
     const p = existing.then(report => {
       if (report.order_token !== 0) {
         const age = Date.now() - (report.timestamp || 0);
-        const quant_diff = Big(order.quantity).sub(report.quantity).abs();
+        const quant_diff = Big(details.quantity).sub(report.quantity).abs();
         const is_small_diff = !quant_diff.gt(Big(report.quantity).mul('0.2'));
 
         /* old order is similar, ignore */
-        if (is_small_diff && age < 10000 && Big(report.price).eq(order.price)) {
-          p.request = existing.request;
+        if (is_small_diff && age < 10000 && Big(report.price).eq(details.price)) {
+          p.order = existing.order;
           return report;
         }
 
-        console.log('replace', order.market, order.is_buy, order.pos, report.price, 'with', order.price);
+        console.log('replace', details.market, details.is_buy, details.pos, report.price, 'with', details.price);
       } else {
-        console.log('new order', order.market, order.is_buy, order.pos, 'at', order.price);
+        console.log('new order', details.market, details.is_buy, details.pos, 'at', details.price);
       }
 
-      order.replace_order_token = report.order_token;
-      const res = this._target.newOrder(order);
-      p.request = res.request;
+      details.replace_order_token = report.order_token;
+      const order = this._target.newOrder(details);
+      order.result.order = order;
 
-      return res.then(report => {
-        report.timestamp = Date.now();
-        return report;
-      })
+      return order.result;
     }).catch(e => {
       console.error(e);
       return existing;
     });
 
-    resting_lookup[order.pos] = p;
+    resting_lookup[details.pos] = p;
   }
 
   _getResting(market, is_buy) {
