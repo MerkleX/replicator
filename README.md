@@ -32,7 +32,7 @@ If you see lots of TRADING\_LIMIT errors, turn off the replicator and place rest
  - [x] replay trades on liquidity source
  - [x] configurable replication
  - [ ] merkleX automatic limit adjustment
- - [ ] share available funds on liquidity target
+ - [x] share available funds on liquidity target
  - [ ] hybrid liquidity sources (combine orderbooks)
  - [ ] mulitple liquidity sources for single market
  - [ ] post trade verification
