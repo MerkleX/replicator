@@ -9,10 +9,14 @@
   "author": "",
   "private": true,
   "dependencies": {
+    "@uniswap/sdk": "^1.0.0-beta.3",
+    "big.js": "^5.2.2",
     "bintrees": "^1.0.2",
     "coinbase-pro": "^0.9.0",
     "merklex": "0.2.2",
     "web3": "^1.2.0",
-    "ws": "7.1.1"
-  }
+    "ws": "7.1.1",
+    "ethereumjs-util": "latest"
+  },
+  "devDependencies": {}
 }

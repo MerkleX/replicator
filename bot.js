@@ -54,9 +54,14 @@ const sources = [
       fees: '0.003',
       price_decimals: 2,
     },
-    base: {
+    buy: {
       value_limits: {
         simple: '300',
+      },
+    },
+    sell: {
+      quantity_limits: {
+        simple: '8',
       },
     }
   },
@@ -96,7 +101,7 @@ const sources = [
     },
     base: {
       value_limits: {
-        simple: '100',
+        simple: '10',
       },
     }
   },
@@ -149,19 +154,22 @@ function timeout(time) {
   });
 }
 
-merklex.connect().then(timeout(1000)).then(() => {
+merklex.connect().then(() => timeout(1000)).then(() => {
   return Promise.all([
     r.refreshResting(),
     r.refreshSourceBalances(),
+    r.refreshTargetBalances(),
+    timeout(1000),
   ]);
 }).then(() => {
   setInterval(() => {
     r.refreshSourceBalances();
+    r.refreshTargetBalances();
     priceAdjust();
   }, 3000);
 
   setInterval(() => {
-    r.refreshOrders();
+      r.refreshOrders();
   }, 100);
 });
 

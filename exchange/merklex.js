@@ -10,6 +10,7 @@ class MerkleX {
   }
 
   connect() {
+    console.log('connect');
     return this._api.connect();
   }
 

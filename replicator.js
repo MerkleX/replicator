@@ -3,7 +3,7 @@ const Big = require('big.js');
 const DEFAULT_SIDE = {
   quantity_limits: {},
   scale: '0.25',
-  levels: 2,
+  levels: 8,
   spread: '0.005',
   level_slope: '1.0001',
 };
@@ -96,7 +96,10 @@ class Replicator {
   }
 
   refreshResting() {
-    return this._target.getResting().then(orders => orders.forEach(this._handleRestingOrder));
+    return this._target.getResting().then(orders => {
+      console.log(orders.length, 'resting orders');
+      orders.forEach(this._handleRestingOrder);
+    });
   }
 
   _handleRestingOrder(order) {
@@ -125,9 +128,11 @@ class Replicator {
 
     if (open_idx !== -1) {
       resting_orders[open_idx] = Promise.resolve(order);
+      resting_orders[open_idx].order = order;
       return;
     }
 
+    console.log('cancel %j', order);
     this._target.cancelOrder(order);
   }
 
@@ -196,6 +201,46 @@ class Replicator {
     p.catch(err => {
       position.current.quote = position.current.quote.sub(quote_delta);
       position.current.base = position.current.base.sub(base_delta);
+    });
+  }
+
+  refreshTargetBalances() {
+    const balance_depended = {};
+    this._sources.forEach(source => {
+      const [base, quote] = source.market.split('-');
+      if (!balance_depended[base]) {
+        balance_depended[base] = [source];
+      } else {
+        balance_depended[base].push(source);
+      }
+      if (!balance_depended[quote]) {
+        balance_depended[quote] = [source];
+      } else {
+        balance_depended[quote].push(source);
+      }
+    });
+
+    return this._target.getBalances().then(balances => {
+      Object.keys(balances).forEach(symbol => {
+        const deps = balance_depended[symbol];
+        if (!deps) {
+          return;
+        }
+
+        const b = balances[symbol];
+
+        Big.DP = 8;
+        const max_per = Big(b.balance).div(deps.length).toFixed(8);
+
+        deps.forEach(dep => {
+          const [base, quote] = dep.market.split('-');
+          if (symbol === base) {
+            dep.sell.quantity_limits.balance_max = max_per;
+          } else {
+            dep.buy.value_limits.balance_max = max_per;
+          }
+        });
+      });
     });
   }
 
@@ -272,7 +317,6 @@ class Replicator {
 
         /* old order is similar, ignore */
         if (is_small_diff && age < 10000 && Big(report.price).eq(details.price)) {
-          p.order = existing.order;
           return report;
         }
 
@@ -283,14 +327,20 @@ class Replicator {
 
       details.replace_order_token = report.order_token;
       const order = this._target.newOrder(details);
-      order.result.order = order;
+      p.order = order;
 
       return order.result;
     }).catch(e => {
-      console.error(e);
+      console.error(e, existing.order);
+
+      if (!e.reason) {
+        return this._target.connect().then(() => existing);
+      }
+
       return existing;
     });
 
+    p.order = existing.order;
     resting_lookup[details.pos] = p;
   }
 
