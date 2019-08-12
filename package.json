@@ -16,7 +16,8 @@
     "merklex": "0.2.2",
     "web3": "^1.2.0",
     "ws": "7.1.1",
-    "ethereumjs-util": "latest"
+    "ethereumjs-util": "latest",
+    "ethereumjs-tx": "latest"
   },
   "devDependencies": {}
 }

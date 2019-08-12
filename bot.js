@@ -1,12 +1,12 @@
 const settings = require('./settings');
 const MerkleX = require('./exchange/merklex');
 const Coinbase = require('./exchange/coinbase');
+const Uniswap = require('./exchange/uniswap');
 const Replicator = require('./replicator');
-const requests = require('superagent');
-const Big = require('big.js');
 
 const coinbase = new Coinbase(settings.coinbase);
 const merklex = new MerkleX(settings.merklex);
+const uniswap = new Uniswap(settings.uniswap);
 
 const sources = [
   {
@@ -89,19 +89,20 @@ const sources = [
   },
   {
     market: '0xBTC-DAI',
-    rebalance: false,
-    price_adjust: '0.00002011',
+    rebalance: true,
     exchange: {
-      iface: coinbase,
-      market: 'BTC-USD',
-      quote: 'USD',
-      base: 'BTC',
-      fees: '0.003',
-      price_decimals: 2,
+      iface: uniswap,
+      market: '0xBTC-DAI',
+      quote: 'DAI',
+      base: '0xBTC',
+      fees: '0.03',
+      price_decimals: 6,
     },
     base: {
+      book_scale: '0.5',
+      spread: '0.03',
       value_limits: {
-        simple: '10',
+        simple: '800',
       },
     }
   },
@@ -129,24 +130,10 @@ const sources = [
   }
 ];
 
-coinbase.subscribeMarkets(sources.map(s => s.exchange.market));
+coinbase.subscribeMarkets(sources.filter(s => s.exchange.iface === coinbase).map(s => s.exchange.market));
+uniswap.subscribeMarkets(sources.filter(s => s.exchange.iface === uniswap).map(s => s.exchange.market));
 
 const r = new Replicator(merklex, sources);
-const price_adjust_0xbtc = r.getSource('0xBTC-DAI');
-
-function priceAdjust() {
-  return requests.get('https://mercatox.com/public/json24')
-    .then(res => JSON.parse(res.text))
-    .then(data => {
-      return data.pairs['0xBTC_BTC'];
-    })
-    .then(details => {
-      Big.DP = 16;
-      price_adjust_0xbtc.price_adjust = Big(details.highestBid).add(details.lowestAsk).div(2);
-      // const spread = Big(details.lowestAsk).sub(details.highestBid).div(details.highestBid).add('0.001');
-      // market.profit = spread;
-    });
-}
 
 function timeout(time) {
   return new Promise(resolve => {
@@ -154,22 +141,24 @@ function timeout(time) {
   });
 }
 
-merklex.connect().then(() => timeout(1000)).then(() => {
-  return Promise.all([
-    r.refreshResting(),
-    r.refreshSourceBalances(),
-    r.refreshTargetBalances(),
-    timeout(1000),
-  ]);
-}).then(() => {
+merklex.connect().then(() => timeout(1000))
+  .then(() => uniswap._update())
+  .then(() => {
+    return Promise.all([
+      r.refreshResting(),
+      r.refreshSourceBalances(),
+      r.refreshTargetBalances(),
+      timeout(1000),
+    ]);
+  }).then(() => {
   setInterval(() => {
     r.refreshSourceBalances();
     r.refreshTargetBalances();
-    priceAdjust();
   }, 3000);
 
   setInterval(() => {
-      r.refreshOrders();
+    r.refreshOrders();
+    r.balancePositions();
   }, 100);
 });
 

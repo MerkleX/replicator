@@ -51,7 +51,7 @@ class Coinbase {
       product_id: order.market,
       side: order.is_buy ? 'buy' : 'sell',
       type: 'limit',
-      size: order.size,
+      size: order.quantity,
       price: order.price
     }).then(res => {
       console.log('rebalance %j', res.body);

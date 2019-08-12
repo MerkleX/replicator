@@ -2,6 +2,7 @@ const Big = require('big.js');
 
 const DEFAULT_SIDE = {
   quantity_limits: {},
+  value_limits: {},
   scale: '0.25',
   levels: 8,
   spread: '0.005',
@@ -91,6 +92,9 @@ class Replicator {
       return s;
     });
 
+    this._balance_position_p = {};
+
+    this.balancePositions = this.balancePositions.bind(this);
     this._handleRestingOrder = this._handleRestingOrder.bind(this);
     this._target.handleMatch(this._onMatch.bind(this));
   }
@@ -154,6 +158,7 @@ class Replicator {
           quote: ZERO,
           base: ZERO,
         },
+        dirty: false,
       };
       this._position[source.market] = position;
     }
@@ -168,12 +173,49 @@ class Replicator {
       position.target.base = position.target.base.sub(report.quantity);
     }
 
-    this._balancePosition(position);
+    position.dirty = true;
+  }
+
+  balancePositions() {
+    Object.keys(this._position).forEach(market => {
+      if (!this._position[market].dirty) {
+        return;
+      }
+      this.balancePosition(market);
+    });
+  }
+
+  balancePosition(market) {
+    if (this._balance_position_p[market]) {
+      return this._balance_position_p[market];
+    }
+
+    let err;
+    const p = this._balancePosition(this._position[market])
+      .catch(e => {
+        err = e;
+        return null;
+      })
+      .then(res => {
+        this._balance_position_p[market] = null;
+        if (err) {
+          throw err;
+        }
+        return res;
+      });
+
+    this._balance_position_p[market] = p;
+    return p;
   }
 
   _balancePosition(position) {
+    position.dirty = false;
     const quote_delta = position.target.quote.sub(position.current.quote);
     const base_delta = position.target.base.sub(position.current.base);
+
+    if (quote_delta.eq(0) && base_delta.eq(0)) {
+      return Promise.resolve();
+    }
 
     const {iface, fees, price_decimals} = position.source.exchange;
 
@@ -186,21 +228,22 @@ class Replicator {
       p = iface.newOrder({
         market: position.source.exchange.market,
         is_buy: true,
-        size: ZERO.sub(base_delta).toFixed(8),
+        quantity: ZERO.sub(base_delta).toFixed(8),
         price: ZERO.sub(quote_delta.div(base_delta)).div(Big(1).add(position.source.exchange.fees)).toFixed(price_decimals),
       });
     } else if (quote_delta.lt(0) && base_delta.gt(0)) {
       p = iface.newOrder({
         market: position.source.exchange.market,
         is_buy: false,
-        size: base_delta.toFixed(8),
+        quantity: base_delta.toFixed(8),
         price: ZERO.sub(quote_delta.div(base_delta)).mul(Big(1).add(position.source.exchange.fees)).toFixed(price_decimals),
       });
     }
 
-    p.catch(err => {
+    return p.catch(err => {
       position.current.quote = position.current.quote.sub(quote_delta);
       position.current.base = position.current.base.sub(base_delta);
+      throw err;
     });
   }
 
@@ -271,6 +314,14 @@ class Replicator {
           }
 
           const balances = exchanges[source.exchange.iface.name];
+          const quote = balances[source.exchange.quote];
+          const base = balances[source.exchange.base];
+
+          if (!quote || !base) {
+            console.error('balances not loaded for', source.exchange.iface.name);
+            return;
+          }
+
           source.buy.value_limits.source_balance = balances[source.exchange.quote].available;
           source.sell.quantity_limits.source_balance = balances[source.exchange.base].available;
         });
@@ -320,7 +371,13 @@ class Replicator {
           return report;
         }
 
-        console.log('replace', details.market, details.is_buy, details.pos, report.price, 'with', details.price);
+        if (report.price === details.price) {
+          console.log('replace', details.market, details.is_buy, details.pos,
+            '@', report.price, 'from:', report.quantity, 'to', details.quantity);
+        } else {
+          console.log('replace', details.market, details.is_buy, details.pos, report.price, 'with', details.price);
+        }
+
       } else {
         console.log('new order', details.market, details.is_buy, details.pos, 'at', details.price);
       }
@@ -371,13 +428,24 @@ class Replicator {
 
     levels = this._distributeLevels(levels, source_side.levels);
 
-    return levels.map((level, pos) => ({
-      market: source.market,
-      pos,
-      price: Big(level.price.mul(source_side.spread(pos)).toPrecision(5)) + '',
-      quantity: level.quantity.toFixed(8),
-      is_buy: source_side.is_buy,
-    }));
+    if (levels.length === 0) {
+      return [];
+    }
+
+    const first_price = +levels[0].price;
+
+    return levels
+      .filter(level => {
+        const p = +level.price;
+        return !(p > first_price * 2 || p * 2 < first_price);
+      })
+      .map((level, pos) => ({
+        market: source.market,
+        pos,
+        price: Big(level.price.mul(source_side.spread(pos)).toPrecision(5)) + '',
+        quantity: level.quantity.toFixed(8),
+        is_buy: source_side.is_buy,
+      }));
   }
 
   _collectLevels(read, remaining, book_scale, price_adjust) {
