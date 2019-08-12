@@ -7,5 +7,8 @@ module.exports = {
     pass: '<redacted>',
     secret: '<redacted>',
     key: '<redacted>',
-  }
+  },
+  uniswap: {
+    private_key: '<redacted>',
+  },
 };
