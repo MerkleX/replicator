@@ -2,8 +2,6 @@ const {
   getMarketDetails,
   getTokenReserves,
   getTradeDetails,
-  tradeTokensForExactTokensWithData,
-  getExecutionDetails,
   TRADE_EXACT,
 } = require('@uniswap/sdk');
 
@@ -53,7 +51,7 @@ class Uniswap {
     }
   }
 
-  static get name() {
+  get name() {
     return 'uniswap';
   }
 
@@ -71,8 +69,15 @@ class Uniswap {
     const balances = {};
     return Promise.all(Object.keys(this._assets).map(symbol => {
       const erc20 = this._erc20[symbol];
+      const reserve = this._reserve[symbol];
+      if (!reserve) {
+        return null;
+      }
+
       return erc20.methods.balanceOf(this._address).call().then(balance => {
-        const b = balance + '';
+        Big.DP = reserve.token.decimals;
+        const b = Big(balance + '').div(Big(10).pow(Big.DP)).toFixed(Big.DP);
+
         balances[symbol] = {
           available: b,
           hold: '0',
@@ -156,7 +161,7 @@ class Uniswap {
       return Promise.reject(new Error('private key not set'));
     }
 
-    const [base_asset, quote_asset] = order.symbol.split('-');
+    const [base_asset, quote_asset] = order.market.split('-');
     const quote_r = this._reserve[quote_asset];
     const base_r = this._reserve[base_asset];
 
@@ -169,7 +174,7 @@ class Uniswap {
       nonce: null,
       gasPrice: '500000000',
       gasLimit: null,
-      value: '0',
+      value: '0x00',
       data: null,
     };
 
@@ -178,41 +183,37 @@ class Uniswap {
 
     if (order.is_buy) {
       tx_info.to = quote_r.exchange.address;
-      tx_info.data = this._uniswap.methods.tokenToTokenSwapOutput(
-        /* tokens_bought */ quantity,
-        /* max_tokens_sold */ value,
-        /* max_eth_sold */ '0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff',
+      tx_info.data = this._uniswap.methods.tokenToTokenSwapInput(
+        /* tokens_bought */ value,
+        /* max_tokens_sold */ Big(quantity).mul(0.6).toFixed(0),
+        /* max_eth_sold */ '1',
         /* deadline */ Big(Date.now() / 1000 + 600).toFixed(0),
         /* token_addr */ base_r.token.address).encodeABI();
     } else {
       tx_info.to = base_r.exchange.address;
-      tx_info.data = this._uniswap.methods.tokenToTokenSwapOutput(
-        /* tokens_bought */ value,
-        /* max_tokens_sold */ quantity,
-        /* max_eth_sold */ '0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff',
+      tx_info.data = this._uniswap.methods.tokenToTokenSwapInput(
+        /* tokens_sold */ quantity,
+        /* min_tokens_bought */ Big(value).mul(0.6).toFixed(0),
+        /* min_eth_bought */ '1',
         /* deadline */ Big(Date.now() / 1000 + 600).toFixed(0),
         /* token_addr */ quote_r.token.address).encodeABI();
     }
 
     return this.getNonce().then(nonce => {
-      tx_info.nonce = this._web3.utils.toHex(nonce);
-      tx_info.gasPrice = this._web3.utils.toHex(5000000000);
-      tx_info.gasLimit = this._web3.utils.toHex(300000);
-      console.log(tx_info);
-      return this._web3.eth.estimateGas(tx_info);
-    }).catch(e => {
-      console.log('here');
-      throw e;
-    }).then(gasLimit => {
-      tx_info.gasLimit = gasLimit;
-
-      console.log(tx_info);
+      tx_info.nonce = nonce;
+      tx_info.gasPrice = 5000000000;
+      tx_info.gasLimit = 150000;
       const tx = new Transaction(tx_info);
       tx.sign(this._priv_key);
       return tx.serialize();
     }).then(res => {
-      console.log(res.toString('hex'));
-    });
+      return this._web3.eth.sendSignedTransaction('0x' + res.toString('hex'));
+    }).then(hash => {
+      console.log(order, 'done', hash);
+    }).catch(err => {
+      console.error('failed to rebalance');
+      throw err;
+    })
   }
 
   getNonce() {
@@ -229,21 +230,8 @@ class Uniswap {
       });
     }
 
-    return this._next_nonce++;
+    return Promise.resolve(this._next_nonce++);
   }
 }
 
 module.exports = Uniswap;
-
-const settings = require('../settings');
-const uniswap = new Uniswap(settings.uniswap);
-uniswap.subscribeMarkets(['0xBTC-DAI']);
-
-uniswap._update().then(() => {
-  uniswap.newOrder({
-    symbol: '0xBTC-DAI',
-    is_buy: false,
-    quantity: '1',
-    price: '0.25'
-  });
-});

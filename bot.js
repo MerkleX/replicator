@@ -89,17 +89,18 @@ const sources = [
   },
   {
     market: '0xBTC-DAI',
-    rebalance: false,
+    rebalance: true,
     exchange: {
       iface: uniswap,
       market: '0xBTC-DAI',
       quote: 'DAI',
       base: '0xBTC',
-      fees: '0.003',
+      fees: '0.03',
       price_decimals: 6,
     },
     base: {
       book_scale: '0.5',
+      spread: '0.03',
       value_limits: {
         simple: '800',
       },
@@ -140,21 +141,24 @@ function timeout(time) {
   });
 }
 
-merklex.connect().then(() => timeout(1000)).then(() => {
-  return Promise.all([
-    r.refreshResting(),
-    r.refreshSourceBalances(),
-    r.refreshTargetBalances(),
-    timeout(1000),
-  ]);
-}).then(() => {
+merklex.connect().then(() => timeout(1000))
+  .then(() => uniswap._update())
+  .then(() => {
+    return Promise.all([
+      r.refreshResting(),
+      r.refreshSourceBalances(),
+      r.refreshTargetBalances(),
+      timeout(1000),
+    ]);
+  }).then(() => {
   setInterval(() => {
     r.refreshSourceBalances();
     r.refreshTargetBalances();
   }, 3000);
 
   setInterval(() => {
-      r.refreshOrders();
+    r.refreshOrders();
+    r.balancePositions();
   }, 100);
 });
 
