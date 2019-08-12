@@ -184,9 +184,9 @@ class Uniswap {
     if (order.is_buy) {
       tx_info.to = quote_r.exchange.address;
       tx_info.data = this._uniswap.methods.tokenToTokenSwapInput(
-        /* tokens_bought */ value,
-        /* max_tokens_sold */ Big(quantity).mul(0.6).toFixed(0),
-        /* max_eth_sold */ '1',
+        /* tokens_sold */ value,
+        /* min_tokens_bought */ Big(quantity).mul(0.6).toFixed(0),
+        /* min_eth_bought */ '1',
         /* deadline */ Big(Date.now() / 1000 + 600).toFixed(0),
         /* token_addr */ base_r.token.address).encodeABI();
     } else {
