@@ -56,13 +56,16 @@ class Uniswap {
   }
 
   _update() {
+    const updated_r = {};
     const loads = Object.keys(this._reserve).map(symbol => {
       return getTokenReserves(this._assets[symbol]).then(r => {
-        this._reserve[symbol] = r;
+        updated_r[symbol] = r;
       });
     });
 
-    return Promise.all(loads);
+    return Promise.all(loads).then(() => {
+      this._reserve = updated_r;
+    });
   }
 
   getBalances() {
